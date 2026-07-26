@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
             """.trimIndent()
 
             webView.evaluateJavascript(jsFetchScript) { result ->
-                val cleanResult = result?.replace(""", "") ?: "等待登录或加载..."
+                val cleanResult = result?.replace("\"", "") ?: "等待登录或加载..."
                 UpdateState.currentLocation = cleanResult
                 UpdateState.lastUpdated = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                 UpdateState.isRefreshing = false
@@ -242,8 +242,10 @@ fun HyperOSLocatorApp(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
-                        text = "• 自动定时：每 50~70 秒浮动抓取
-• 防封机制：随机时间间隔，降低风控概率",
+                        text = """
+                            • 自动定时：每 50~70 秒浮动抓取
+                            • 防封机制：随机时间间隔，降低风控概率
+                        """.trimIndent(),
                         fontSize = 12.sp,
                         color = textSecondary,
                         lineHeight = 18.sp
