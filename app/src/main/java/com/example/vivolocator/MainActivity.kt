@@ -154,7 +154,7 @@ fun HyperOSLocatorApp(
                     colors = CardDefaults.cardColors(containerColor = cardBgColor),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(280.dp)
+                        .height(450.dp)
                         .padding(bottom = 16.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
