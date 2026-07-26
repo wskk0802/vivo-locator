@@ -203,11 +203,15 @@ fun HyperOSLocatorApp(
                                         isUserGesture: Boolean,
                                         resultMsg: Message?
                                     ): Boolean {
-                                        val hrefMsg = view?.handler?.obtainMessage()
-                                        view?.requestFocusNodeHref(hrefMsg)
-                                        val url = hrefMsg?.data?.getString("url")
-                                        if (!url.isNullAndEmpty()) {
-                                            view.loadUrl(url)
+                                        view?.let { webView ->
+                                            val hrefMsg = webView.handler?.obtainMessage()
+                                            if (hrefMsg != null) {
+                                                webView.requestFocusNodeHref(hrefMsg)
+                                                val url = hrefMsg.data?.getString("url")
+                                                if (!url.isNullOrEmpty()) {
+                                                    webView.loadUrl(url)
+                                                }
+                                            }
                                         }
                                         return false
                                     }
