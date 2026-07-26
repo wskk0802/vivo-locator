@@ -1,8 +1,9 @@
 package com.example.vivolocator
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.os.Bundle
-import android.os.Message
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -165,67 +166,61 @@ fun HyperOSLocatorApp(
                     AndroidView(
                         factory = { context ->
                             WebView(context).apply {
+                                // 1. 开启硬件加速（保证图形与滑块 Canvas 渲染）
+                                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
                                 settings.apply {
-                                    // 1. 基础 JavaScript & DOM 存储设置（验证码强依赖）
+                                    // 2. 基础 JavaScript & 存储设置
                                     javaScriptEnabled = true
                                     domStorageEnabled = true
                                     databaseEnabled = true
+                                    allowFileAccess = true
+                                    allowContentAccess = true
 
-                                    // 2. 弹窗与窗口控制（关键修复：关闭多窗口支持，强行让验证码在当前页内弹出）
-                                    javaScriptCanOpenWindowsAutomatically = true
-                                    setSupportMultipleWindows(false)
+                                    // 3. 彻底伪装为 PC 桌面端 Chrome，绕过移动端极验/VIVO 严格风控
+                                    userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-                                    // 3. 网页视图与缩放适应
+                                    // 4. 模拟桌面大屏视口
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
                                     setSupportZoom(true)
                                     builtInZoomControls = true
                                     displayZoomControls = false
 
-                                    // 4. 混合资源与 Cookie 支持
+                                    // 5. 跨域与弹窗支持
                                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                    
-                                    // 5. 采用系统默认的正常 Android Chrome UA，避免被 vivo 风控系统拦截
-                                    val defaultUa = userAgentString
-                                    userAgentString = defaultUa.replace("; wv", "")
+                                    javaScriptCanOpenWindowsAutomatically = true
+                                    setSupportMultipleWindows(false)
                                 }
 
-                                // 6. 启用 Cookie
+                                // 6. 启用全套 Cookie
                                 val cookieManager = CookieManager.getInstance()
                                 cookieManager.setAcceptCookie(true)
                                 cookieManager.setAcceptThirdPartyCookies(this, true)
 
-                                // 7. WebChromeClient 修复（拦截 target="_blank" 或 popup 并在当前 WebView 打开）
-                                webChromeClient = object : WebChromeClient() {
-                                    override fun onCreateWindow(
-                                        view: WebView?,
-                                        isDialog: Boolean,
-                                        isUserGesture: Boolean,
-                                        resultMsg: Message?
-                                    ): Boolean {
-                                        view?.let { webView ->
-                                            val hrefMsg = webView.handler?.obtainMessage()
-                                            if (hrefMsg != null) {
-                                                webView.requestFocusNodeHref(hrefMsg)
-                                                val url = hrefMsg.data?.getString("url")
-                                                if (!url.isNullOrEmpty()) {
-                                                    webView.loadUrl(url)
-                                                }
-                                            }
-                                        }
-                                        return false
-                                    }
-                                }
-
+                                // 7. 注入抹除 WebView 自动化特征的脚本
                                 webViewClient = object : WebViewClient() {
-                                    override fun shouldOverrideUrlLoading(
-                                        view: WebView?,
-                                        url: String?
-                                    ): Boolean {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                        super.onPageStarted(view, url, favicon)
+                                        // 反风控检测脚本：抹除 webdriver 特征，伪装真实浏览器环境
+                                        val maskJs = """
+                                            (function() {
+                                                try {
+                                                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                                                    window.navigator.chrome = { runtime: {} };
+                                                } catch(e) {}
+                                            })();
+                                        """.trimIndent()
+                                        view?.evaluateJavascript(maskJs, null)
+                                    }
+
+                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                                         url?.let { view?.loadUrl(it) }
                                         return true
                                     }
                                 }
+
+                                webChromeClient = WebChromeClient()
 
                                 loadUrl("https://cloud.vivo.com")
                                 onWebViewCreated(this)
