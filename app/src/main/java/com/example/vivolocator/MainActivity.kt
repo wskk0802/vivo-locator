@@ -1,10 +1,9 @@
 package com.example.vivolocator
 
 import android.annotation.SuppressLint
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
+import android.graphics.Bitmap
 import android.os.Bundle
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -23,7 +22,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -103,16 +101,6 @@ object UpdateState {
     var showWebViewLogin by mutableStateOf(true)
 }
 
-// 调用系统浏览器打开登录页
-fun openInSystemBrowser(context: Context, url: String = "https://cloud.vivo.com") {
-    try {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-}
-
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,7 +108,6 @@ fun HyperOSLocatorApp(
     onWebViewCreated: (WebView) -> Unit,
     onManualRefresh: () -> Unit
 ) {
-    val context = LocalContext.current
     val hyperBgColor = Color(0xFFF4F4F6)
     val cardBgColor = Color(0xFFFFFFFF)
     val hyperAccentBlue = Color(0xFF007AFF)
@@ -140,23 +127,12 @@ fun HyperOSLocatorApp(
                     )
                 },
                 actions = {
-                    // 跳转外部浏览器登录按钮
-                    TextButton(
-                        onClick = { openInSystemBrowser(context) }
-                    ) {
-                        Text(
-                            text = "外部登录",
-                            color = hyperAccentBlue,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    // 折叠/展开 App 内网页面板
                     TextButton(
                         onClick = { UpdateState.showWebViewLogin = !UpdateState.showWebViewLogin }
                     ) {
                         Text(
                             text = if (UpdateState.showWebViewLogin) "隐藏网页" else "显示网页",
-                            color = textSecondary,
+                            color = hyperAccentBlue,
                             fontWeight = FontWeight.Medium
                         )
                     }
@@ -187,66 +163,68 @@ fun HyperOSLocatorApp(
                         .padding(bottom = 12.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // 顶部跳转提示条
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFFEBF5FF))
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "内嵌弹窗被拦截？尝试通过系统浏览器登录",
-                                fontSize = 12.sp,
-                                color = hyperAccentBlue
-                            )
-                            Button(
-                                onClick = { openInSystemBrowser(context) },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                modifier = Modifier.height(28.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = hyperAccentBlue)
-                            ) {
-                                Text("跳转登录", fontSize = 11.sp, color = Color.White)
-                            }
-                        }
+                    AndroidView(
+                        factory = { context ->
+                            WebView(context).apply {
+                                // 硬件加速渲染
+                                setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-                        // App 内嵌 WebView Container
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    settings.apply {
-                                        javaScriptEnabled = true
-                                        domStorageEnabled = true
-                                        databaseEnabled = true
-                                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                        
-                                        // 使用正常的手机 Chrome UA
-                                        val defaultUa = userAgentString
-                                        userAgentString = defaultUa.replace("; wv", "")
-                                    }
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    databaseEnabled = true
+                                    allowFileAccess = true
+                                    allowContentAccess = true
 
-                                    val cookieManager = CookieManager.getInstance()
-                                    cookieManager.setAcceptCookie(true)
-                                    cookieManager.setAcceptThirdPartyCookies(this, true)
+                                    // 伪装成标准的 macOS Chrome 浏览器（绕过 VIVO 对 Android WebView 的验证码屏蔽）
+                                    userAgentString = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-                                    webViewClient = object : WebViewClient() {
-                                        override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                            url?.let { view?.loadUrl(it) }
-                                            return true
-                                        }
-                                    }
+                                    // 自适应屏幕比例
+                                    useWideViewPort = true
+                                    loadWithOverviewMode = true
+                                    setSupportZoom(true)
+                                    builtInZoomControls = true
+                                    displayZoomControls = false
 
-                                    webChromeClient = WebChromeClient()
-
-                                    loadUrl("https://cloud.vivo.com")
-                                    onWebViewCreated(this)
+                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    javaScriptCanOpenWindowsAutomatically = true
+                                    setSupportMultipleWindows(false)
                                 }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
+
+                                // 开启全局 Cookie
+                                val cookieManager = CookieManager.getInstance()
+                                cookieManager.setAcceptCookie(true)
+                                cookieManager.setAcceptThirdPartyCookies(this, true)
+
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                        super.onPageStarted(view, url, favicon)
+                                        // 抹除自动化/ WebView 标识，绕过风控
+                                        val maskJs = """
+                                            (function() {
+                                                try {
+                                                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                                                    window.navigator.chrome = { runtime: {} };
+                                                } catch(e) {}
+                                            })();
+                                        """.trimIndent()
+                                        view?.evaluateJavascript(maskJs, null)
+                                    }
+
+                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                        url?.let { view?.loadUrl(it) }
+                                        return true
+                                    }
+                                }
+
+                                webChromeClient = WebChromeClient()
+
+                                loadUrl("https://cloud.vivo.com")
+                                onWebViewCreated(this)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
 
