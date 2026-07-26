@@ -166,7 +166,6 @@ fun HyperOSLocatorApp(
                     AndroidView(
                         factory = { context ->
                             WebView(context).apply {
-                                // 硬件加速渲染
                                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
                                 settings.apply {
@@ -176,10 +175,10 @@ fun HyperOSLocatorApp(
                                     allowFileAccess = true
                                     allowContentAccess = true
 
-                                    // 伪装成标准的 macOS Chrome 浏览器（绕过 VIVO 对 Android WebView 的验证码屏蔽）
-                                    userAgentString = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                    // 1. 设置标准的 Windows 桌面 Chrome UA
+                                    userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-                                    // 自适应屏幕比例
+                                    // 2. 强制使用电脑大屏视口与缩放机制
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
                                     setSupportZoom(true)
@@ -191,7 +190,6 @@ fun HyperOSLocatorApp(
                                     setSupportMultipleWindows(false)
                                 }
 
-                                // 开启全局 Cookie
                                 val cookieManager = CookieManager.getInstance()
                                 cookieManager.setAcceptCookie(true)
                                 cookieManager.setAcceptThirdPartyCookies(this, true)
@@ -199,16 +197,32 @@ fun HyperOSLocatorApp(
                                 webViewClient = object : WebViewClient() {
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                         super.onPageStarted(view, url, favicon)
-                                        // 抹除自动化/ WebView 标识，绕过风控
-                                        val maskJs = """
+                                        // 3. 注入脚本：修改屏幕宽度与视口，抹除 WebView 自动化特征，强行触发 PC 版渲染
+                                        val desktopSpoofJs = """
                                             (function() {
                                                 try {
+                                                    // 覆盖 screen 和 outerWidth/Height 属性，欺骗 JS 渲染逻辑
+                                                    Object.defineProperty(window, 'outerWidth', {get: () => 1920});
+                                                    Object.defineProperty(window, 'outerHeight', {get: () => 1080});
+                                                    Object.defineProperty(screen, 'width', {get: () => 1920});
+                                                    Object.defineProperty(screen, 'height', {get: () => 1080});
+                                                    
+                                                    // 抹除 webdriver 特征
                                                     Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                                                     window.navigator.chrome = { runtime: {} };
+
+                                                    // 强制将 viewport 设置为桌面宽度 1280px
+                                                    var meta = document.querySelector('meta[name="viewport"]');
+                                                    if (!meta) {
+                                                        meta = document.createElement('meta');
+                                                        meta.name = 'viewport';
+                                                        document.getElementsByTagName('head')[0].appendChild(meta);
+                                                    }
+                                                    meta.content = 'width=1280, initial-scale=0.3, maximum-scale=2.0, user-scalable=yes';
                                                 } catch(e) {}
                                             })();
                                         """.trimIndent()
-                                        view?.evaluateJavascript(maskJs, null)
+                                        view?.evaluateJavascript(desktopSpoofJs, null)
                                     }
 
                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
