@@ -55,4 +55,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.webkit:webkit:1.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+     implementation("com.tencent.tbs.tbssdk:sdk:4.3.0.276")
 }
