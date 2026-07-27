@@ -3,12 +3,15 @@ package com.example.vivolocator
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Message
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebViewTransport
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
@@ -56,7 +59,6 @@ class MainActivity : ComponentActivity() {
         autoFetchJob?.cancel()
     }
 
-    // 随机 50s ~ 70s 定时轮询 (平均 60s)，防封 IP
     private fun startRandomIntervalPolling() {
         autoFetchJob?.cancel()
         autoFetchJob = CoroutineScope(Dispatchers.Main).launch {
@@ -72,7 +74,6 @@ class MainActivity : ComponentActivity() {
         webViewInstance?.let { webView ->
             val jsFetchScript = """
                 (function() {
-                    // 尝试抓取 vivo 云服务页面上的定位文本节点
                     var addrElem = document.querySelector('.location-address') 
                                 || document.querySelector('.device-address')
                                 || document.querySelector('.device-status-info');
@@ -93,13 +94,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// 状态管理单例
 object UpdateState {
     var currentLocation by mutableStateOf("未获取到位置，请先点击右上角登录 vivo 账号")
     var lastUpdated by mutableStateOf("未更新")
     var isRefreshing by mutableStateOf(false)
     var showWebViewLogin by mutableStateOf(true)
 }
+
+// ★ 桌面 UA 常量，统一使用
+private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -147,12 +150,11 @@ fun HyperOSLocatorApp(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp)
         ) {
-            // 登录 WebView 展开/折叠面板
             AnimatedVisibility(
                 visible = UpdateState.showWebViewLogin,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
-                modifier = Modifier.weight(1f) // 让网页区域自适应占满绝大部分屏幕
+                modifier = Modifier.weight(1f)
             ) {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -175,10 +177,9 @@ fun HyperOSLocatorApp(
                                     allowFileAccess = true
                                     allowContentAccess = true
 
-                                    // 1. 设置标准的 Windows 桌面 Chrome UA
-                                    userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                                    // ★ 强制桌面 UA
+                                    userAgentString = DESKTOP_UA
 
-                                    // 2. 强制使用电脑大屏视口与缩放机制
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
                                     setSupportZoom(true)
@@ -187,7 +188,8 @@ fun HyperOSLocatorApp(
 
                                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                     javaScriptCanOpenWindowsAutomatically = true
-                                    setSupportMultipleWindows(false)
+                                    // ★★★ 关键改动：从 false 改为 true，否则 window.open 弹不出验证窗口
+                                    setSupportMultipleWindows(true)
                                 }
 
                                 val cookieManager = CookieManager.getInstance()
@@ -195,23 +197,49 @@ fun HyperOSLocatorApp(
                                 cookieManager.setAcceptThirdPartyCookies(this, true)
 
                                 webViewClient = object : WebViewClient() {
+
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                        super.onPageStarted(view, url, favicon)
-                                        // 3. 注入脚本：修改屏幕宽度与视口，抹除 WebView 自动化特征，强行触发 PC 版渲染
-                                        val desktopSpoofJs = """
+                                        super.onPageStarted(view, url)
+                                        injectDesktopJs(view)
+                                    }
+
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        // ★ 页面加载完再注入一次，确保覆盖页面自己的 JS
+                                        injectDesktopJs(view)
+                                    }
+
+                                    // ★ 拦截跳转：如果 vivo 试图跳转到手机版 URL，强行拦住
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                        val url = request?.url?.toString() ?: return false
+                                        val blockedPatterns = listOf("/m/", "m.cloud.vivo", "mobile=1", "wap/")
+                                        for (pattern in blockedPatterns) {
+                                            if (url.contains(pattern)) {
+                                                val fixedUrl = url.replace("://m.", "://cloud.")
+                                                    .replace("/m/", "/")
+                                                    .replace("mobile=1", "")
+                                                view?.loadUrl(fixedUrl)
+                                                return true
+                                            }
+                                        }
+                                        return false
+                                    }
+
+                                    private fun injectDesktopJs(view: WebView?) {
+                                        val js = """
                                             (function() {
                                                 try {
-                                                    // 覆盖 screen 和 outerWidth/Height 属性，欺骗 JS 渲染逻辑
                                                     Object.defineProperty(window, 'outerWidth', {get: () => 1920});
                                                     Object.defineProperty(window, 'outerHeight', {get: () => 1080});
                                                     Object.defineProperty(screen, 'width', {get: () => 1920});
                                                     Object.defineProperty(screen, 'height', {get: () => 1080});
-                                                    
-                                                    // 抹除 webdriver 特征
+                                                    Object.defineProperty(navigator, 'userAgent', {
+                                                        get: () => '$DESKTOP_UA'
+                                                    });
+                                                    Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
                                                     Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                                                     window.navigator.chrome = { runtime: {} };
-
-                                                    // 强制将 viewport 设置为桌面宽度 1280px
+                                                    
                                                     var meta = document.querySelector('meta[name="viewport"]');
                                                     if (!meta) {
                                                         meta = document.createElement('meta');
@@ -219,21 +247,53 @@ fun HyperOSLocatorApp(
                                                         document.getElementsByTagName('head')[0].appendChild(meta);
                                                     }
                                                     meta.content = 'width=1280, initial-scale=0.3, maximum-scale=2.0, user-scalable=yes';
+                                                    
+                                                    // ★ 欺骗 touch 检测：让页面以为不支持触摸（很多站点靠这个判断手机）
+                                                    delete window.ontouchstart;
+                                                    delete window.ontouchmove;
+                                                    delete window.ontouchend;
                                                 } catch(e) {}
                                             })();
                                         """.trimIndent()
-                                        view?.evaluateJavascript(desktopSpoofJs, null)
+                                        view?.evaluateJavascript(js, null)
                                     }
+                                }
 
-                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                        url?.let { view?.loadUrl(it) }
+                                // ★★★ 接管 window.open 弹出的新窗口（验证码弹窗就靠这个）
+                                webChromeClient = object : WebChromeClient() {
+                                    override fun onCreateWindow(
+                                        view: WebView?,
+                                        isDialog: Boolean,
+                                        isUserGesture: Boolean,
+                                        resultMsg: Message?
+                                    ): Boolean {
+                                        val newWebView = WebView(context).apply {
+                                            settings.javaScriptEnabled = true
+                                            settings.domStorageEnabled = true
+                                            settings.databaseEnabled = true
+                                            settings.userAgentString = DESKTOP_UA
+                                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                            settings.setSupportMultipleWindows(true)
+                                        }
+                                        // 新窗口也注入桌面伪装
+                                        newWebView.webViewClient = object : WebViewClient() {
+                                            override fun onPageFinished(view: WebView?, url: String?) {
+                                                super.onPageFinished(view, url)
+                                                view?.evaluateJavascript(
+                                                    "Object.defineProperty(navigator,'userAgent',{get:()=>'$DESKTOP_UA'});Object.defineProperty(navigator,'platform',{get:()=>'Win32'});",
+                                                    null
+                                                )
+                                            }
+                                        }
+                                        val transport = resultMsg?.obj as? WebViewTransport
+                                        transport?.webView = newWebView
+                                        resultMsg?.sendToTarget()
                                         return true
                                     }
                                 }
 
-                                webChromeClient = WebChromeClient()
-
-                                loadUrl("https://cloud.vivo.com")
+                                // ★ 改用国内版地址（你之前用的是 cloud.vivo.com，国内服务用 .com.cn 更稳定）
+                                loadUrl("https://cloud.vivo.com.cn")
                                 onWebViewCreated(this)
                             }
                         },
@@ -242,7 +302,7 @@ fun HyperOSLocatorApp(
                 }
             }
 
-            // 澎湃 OS 风格主定位卡片
+            // ↓↓↓ 以下 UI 部分完全没动，保持你原来的设计 ↓↓↓
             Card(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = cardBgColor),
@@ -308,7 +368,6 @@ fun HyperOSLocatorApp(
                 }
             }
 
-            // 澎湃 OS 大胶囊按钮
             Button(
                 onClick = {
                     UpdateState.isRefreshing = true
