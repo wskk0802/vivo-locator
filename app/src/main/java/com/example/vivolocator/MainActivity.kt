@@ -3,7 +3,6 @@ package com.example.vivolocator
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.Bundle
-import android.os.Message
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -11,7 +10,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.webkit.WebViewTransport
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
@@ -101,7 +99,6 @@ object UpdateState {
     var showWebViewLogin by mutableStateOf(true)
 }
 
-// ★ 桌面 UA 常量，统一使用
 private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -122,17 +119,10 @@ fun HyperOSLocatorApp(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "vivo 亲友位置",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = textPrimary
-                    )
+                    Text(text = "vivo 亲友位置", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = textPrimary)
                 },
                 actions = {
-                    TextButton(
-                        onClick = { UpdateState.showWebViewLogin = !UpdateState.showWebViewLogin }
-                    ) {
+                    TextButton(onClick = { UpdateState.showWebViewLogin = !UpdateState.showWebViewLogin }) {
                         Text(
                             text = if (UpdateState.showWebViewLogin) "隐藏网页" else "显示网页",
                             color = hyperAccentBlue,
@@ -176,20 +166,16 @@ fun HyperOSLocatorApp(
                                     databaseEnabled = true
                                     allowFileAccess = true
                                     allowContentAccess = true
-
-                                    // ★ 强制桌面 UA
                                     userAgentString = DESKTOP_UA
-
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
                                     setSupportZoom(true)
                                     builtInZoomControls = true
                                     displayZoomControls = false
-
                                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                     javaScriptCanOpenWindowsAutomatically = true
-                                    // ★★★ 关键改动：从 false 改为 true，否则 window.open 弹不出验证窗口
-                                    setSupportMultipleWindows(true)
+                                    // 不设 true 了，避免需要 onCreateWindow 的麻烦
+                                    setSupportMultipleWindows(false)
                                 }
 
                                 val cookieManager = CookieManager.getInstance()
@@ -205,17 +191,17 @@ fun HyperOSLocatorApp(
 
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
-                                        // ★ 页面加载完再注入一次，确保覆盖页面自己的 JS
                                         injectDesktopJs(view)
                                     }
 
-                                    // ★ 拦截跳转：如果 vivo 试图跳转到手机版 URL，强行拦住
+                                    // ★ 拦截所有跳转，阻止跳手机版，统一在当前 WebView 加载
                                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                         val url = request?.url?.toString() ?: return false
-                                        val blockedPatterns = listOf("/m/", "m.cloud.vivo", "mobile=1", "wap/")
-                                        for (pattern in blockedPatterns) {
+                                        val mobilePatterns = listOf("/m/", "m.cloud.vivo", "mobile=1", "/wap/")
+                                        for (pattern in mobilePatterns) {
                                             if (url.contains(pattern)) {
-                                                val fixedUrl = url.replace("://m.", "://cloud.")
+                                                val fixedUrl = url
+                                                    .replace("://m.", "://cloud.")
                                                     .replace("/m/", "/")
                                                     .replace("mobile=1", "")
                                                 view?.loadUrl(fixedUrl)
@@ -239,7 +225,9 @@ fun HyperOSLocatorApp(
                                                     Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
                                                     Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                                                     window.navigator.chrome = { runtime: {} };
-                                                    
+                                                    delete window.ontouchstart;
+                                                    delete window.ontouchmove;
+                                                    delete window.ontouchend;
                                                     var meta = document.querySelector('meta[name="viewport"]');
                                                     if (!meta) {
                                                         meta = document.createElement('meta');
@@ -247,11 +235,6 @@ fun HyperOSLocatorApp(
                                                         document.getElementsByTagName('head')[0].appendChild(meta);
                                                     }
                                                     meta.content = 'width=1280, initial-scale=0.3, maximum-scale=2.0, user-scalable=yes';
-                                                    
-                                                    // ★ 欺骗 touch 检测：让页面以为不支持触摸（很多站点靠这个判断手机）
-                                                    delete window.ontouchstart;
-                                                    delete window.ontouchmove;
-                                                    delete window.ontouchend;
                                                 } catch(e) {}
                                             })();
                                         """.trimIndent()
@@ -259,40 +242,9 @@ fun HyperOSLocatorApp(
                                     }
                                 }
 
-                                // ★★★ 接管 window.open 弹出的新窗口（验证码弹窗就靠这个）
-                                webChromeClient = object : WebChromeClient() {
-                                    override fun onCreateWindow(
-                                        view: WebView?,
-                                        isDialog: Boolean,
-                                        isUserGesture: Boolean,
-                                        resultMsg: Message?
-                                    ): Boolean {
-                                        val newWebView = WebView(context).apply {
-                                            settings.javaScriptEnabled = true
-                                            settings.domStorageEnabled = true
-                                            settings.databaseEnabled = true
-                                            settings.userAgentString = DESKTOP_UA
-                                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                            settings.setSupportMultipleWindows(true)
-                                        }
-                                        // 新窗口也注入桌面伪装
-                                        newWebView.webViewClient = object : WebViewClient() {
-                                            override fun onPageFinished(view: WebView?, url: String?) {
-                                                super.onPageFinished(view, url)
-                                                view?.evaluateJavascript(
-                                                    "Object.defineProperty(navigator,'userAgent',{get:()=>'$DESKTOP_UA'});Object.defineProperty(navigator,'platform',{get:()=>'Win32'});",
-                                                    null
-                                                )
-                                            }
-                                        }
-                                        val transport = resultMsg?.obj as? WebViewTransport
-                                        transport?.webView = newWebView
-                                        resultMsg?.sendToTarget()
-                                        return true
-                                    }
-                                }
+                                // 简单的 WebChromeClient，不做新窗口
+                                webChromeClient = WebChromeClient()
 
-                                // ★ 改用国内版地址（你之前用的是 cloud.vivo.com，国内服务用 .com.cn 更稳定）
                                 loadUrl("https://cloud.vivo.com.cn")
                                 onWebViewCreated(this)
                             }
@@ -302,7 +254,7 @@ fun HyperOSLocatorApp(
                 }
             }
 
-            // ↓↓↓ 以下 UI 部分完全没动，保持你原来的设计 ↓↓↓
+            // ---- 以下 UI 完全不变 ----
             Card(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = cardBgColor),
@@ -311,9 +263,7 @@ fun HyperOSLocatorApp(
                     .fillMaxWidth()
                     .padding(vertical = 8.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -327,18 +277,9 @@ fun HyperOSLocatorApp(
                                     .background(Color(0xFF34C759))
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "智能防护中",
-                                fontSize = 13.sp,
-                                color = textSecondary,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Text(text = "智能防护中", fontSize = 13.sp, color = textSecondary, fontWeight = FontWeight.Medium)
                         }
-
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFFF0F0F2)
-                        ) {
+                        Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFFF0F0F2)) {
                             Text(
                                 text = "上次更新: ${UpdateState.lastUpdated}",
                                 fontSize = 11.sp,
@@ -347,17 +288,9 @@ fun HyperOSLocatorApp(
                             )
                         }
                     }
-
                     Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = "亲友当前位置",
-                        fontSize = 12.sp,
-                        color = textSecondary
-                    )
-
+                    Text(text = "亲友当前位置", fontSize = 12.sp, color = textSecondary)
                     Spacer(modifier = Modifier.height(4.dp))
-
                     Text(
                         text = UpdateState.currentLocation,
                         fontSize = 16.sp,
@@ -387,7 +320,6 @@ fun HyperOSLocatorApp(
                     color = Color.White
                 )
             }
-
             Spacer(modifier = Modifier.height(8.dp))
         }
     }
