@@ -7,6 +7,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebView.WebViewTransport
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,6 +93,7 @@ fun HyperOSLocatorApp(
     onWebViewCreated: (WebView) -> Unit,
     onManualRefresh: () -> Unit
 ) {
+    val context = LocalContext.current
     val hyperBgColor = Color(0xFFF4F4F6)
     val cardBgColor = Color(0xFFFFFFFF)
     val hyperAccentBlue = Color(0xFF007AFF)
@@ -127,8 +130,8 @@ fun HyperOSLocatorApp(
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     AndroidView(
-                        factory = { context ->
-                            WebView(context).apply {
+                        factory = { ctx ->
+                            WebView(ctx).apply {
                                 settings.apply {
                                     javaScriptEnabled = true
                                     domStorageEnabled = true
@@ -137,29 +140,66 @@ fun HyperOSLocatorApp(
                                     useWideViewPort = true
                                     loadWithOverviewMode = true
                                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    javaScriptCanOpenWindowsAutomatically = true
+                                    setSupportMultipleWindows(true) // ★ 关键：允许新窗口（验证弹窗需要）
                                 }
 
-                                // ✅ 修正：明确用 this（WebView 本身）传给 setAcceptThirdPartyCookies
-                                val cookieManager = CookieManager.getInstance()
-                                cookieManager.setAcceptCookie(true)
-                                cookieManager.setAcceptThirdPartyCookies(this, true)
+                                val cm = CookieManager.getInstance()
+                                cm.setAcceptCookie(true)
+                                cm.setAcceptThirdPartyCookies(this, true)
 
                                 webViewClient = object : WebViewClient() {
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
-                                        view?.evaluateJavascript(
-                                            "Object.defineProperty(navigator,'userAgent',{get:()=>'$DESKTOP_UA'});Object.defineProperty(navigator,'platform',{get:()=>'Win32'});var m=document.querySelector('meta[name=\"viewport\"]');if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m)}m.content='width=1280';",
-                                            null
-                                        )
+                                        // 注入桌面伪装
+                                        view?.evaluateJavascript(desktopJsInject, null)
                                     }
 
                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                        url?.let { view?.loadUrl(it) }
+                                        // 拦截手机版跳转
+                                        url?.let {
+                                            if (it.contains("/m.") || it.contains("/m/") || it.contains("mobile=1")) {
+                                                val fixed = it.replace("://m.", "://find.")
+                                                    .replace("/m/", "/")
+                                                    .replace("mobile=1", "")
+                                                view?.loadUrl(fixed)
+                                                return true
+                                            }
+                                        }
+                                        return false
+                                    }
+                                }
+
+                                // ★ 正确实现 onCreateWindow，用 WebView.WebViewTransport 内部类
+                                webChromeClient = object : WebChromeClient() {
+                                    override fun onCreateWindow(
+                                        view: WebView?,
+                                        isDialog: Boolean,
+                                        isUserGesture: Boolean,
+                                        resultMsg: android.os.Message?
+                                    ): Boolean {
+                                        val newWebView = WebView(context).apply {
+                                            settings.javaScriptEnabled = true
+                                            settings.domStorageEnabled = true
+                                            settings.databaseEnabled = true
+                                            settings.userAgentString = DESKTOP_UA
+                                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                            settings.setSupportMultipleWindows(true)
+                                        }
+                                        // 新窗口也注入伪装
+                                        newWebView.webViewClient = object : WebViewClient() {
+                                            override fun onPageFinished(v: WebView?, u: String?) {
+                                                super.onPageFinished(v, u)
+                                                v?.evaluateJavascript(desktopJsInject, null)
+                                            }
+                                        }
+                                        val transport = resultMsg?.obj as? WebViewTransport
+                                        transport?.webView = newWebView
+                                        resultMsg?.sendToTarget()
                                         return true
                                     }
                                 }
 
-                                webChromeClient = WebChromeClient()
                                 loadUrl("https://find.vivo.com.cn")
                                 onWebViewCreated(this)
                             }
@@ -169,6 +209,7 @@ fun HyperOSLocatorApp(
                 }
             }
 
+            // 定位卡片
             Card(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = cardBgColor),
@@ -192,6 +233,7 @@ fun HyperOSLocatorApp(
                 }
             }
 
+            // 刷新按钮
             Button(
                 onClick = { UpdateState.isRefreshing = true; onManualRefresh() },
                 shape = RoundedCornerShape(30.dp),
@@ -204,3 +246,22 @@ fun HyperOSLocatorApp(
         }
     }
 }
+
+// JS 注入脚本抽出来复用
+private val desktopJsInject = """
+    (function() {
+        try {
+            Object.defineProperty(window, 'outerWidth', {get: () => 1920});
+            Object.defineProperty(window, 'outerHeight', {get: () => 1080});
+            Object.defineProperty(screen, 'width', {get: () => 1920});
+            Object.defineProperty(screen, 'height', {get: () => 1080});
+            Object.defineProperty(navigator, 'userAgent', {get: () => '$DESKTOP_UA'});
+            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.navigator.chrome = {runtime: {}};
+            var m = document.querySelector('meta[name="viewport"]');
+            if (!m) { m = document.createElement('meta'); m.name = 'viewport'; document.head.appendChild(m); }
+            m.content = 'width=1280';
+        } catch(e) {}
+    })();
+""".trimIndent()
