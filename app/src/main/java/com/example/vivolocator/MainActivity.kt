@@ -2,12 +2,12 @@ package com.example.vivolocator
 
 import android.annotation.SuppressLint
 import android.os.Bundle
-import android.webkit.CookieManager
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.webkit.WebView.WebViewTransport
+import android.os.Message
+import com.tencent.smtt.sdk.CookieManager
+import com.tencent.smtt.sdk.WebChromeClient
+import com.tencent.smtt.sdk.WebView
+import com.tencent.smtt.sdk.WebViewClient
+import com.tencent.smtt.sdk.IX5WebChromeClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
@@ -78,13 +78,31 @@ class MainActivity : ComponentActivity() {
 }
 
 object UpdateState {
-    var currentLocation by mutableStateOf("未获取到位置，请先点击右上角登录 vivo 账号")
+    var currentLocation by mutableStateOf("未获取到位置，请先登录 vivo 账号并过验证")
     var lastUpdated by mutableStateOf("未更新")
     var isRefreshing by mutableStateOf(false)
     var showWebViewLogin by mutableStateOf(true)
 }
 
 private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
+private val desktopJsInject = """
+    (function() {
+        try {
+            Object.defineProperty(window, 'outerWidth', {get: () => 1920});
+            Object.defineProperty(window, 'outerHeight', {get: () => 1080});
+            Object.defineProperty(screen, 'width', {get: () => 1920});
+            Object.defineProperty(screen, 'height', {get: () => 1080});
+            Object.defineProperty(navigator, 'userAgent', {get: () => '$DESKTOP_UA'});
+            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.navigator.chrome = {runtime: {}};
+            var m = document.querySelector('meta[name="viewport"]');
+            if (!m) { m = document.createElement('meta'); m.name = 'viewport'; document.head.appendChild(m); }
+            m.content = 'width=1280';
+        } catch(e) {}
+    })();
+""".trimIndent()
 
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -132,17 +150,16 @@ fun HyperOSLocatorApp(
                     AndroidView(
                         factory = { ctx ->
                             WebView(ctx).apply {
-                                settings.apply {
-                                    javaScriptEnabled = true
-                                    domStorageEnabled = true
-                                    databaseEnabled = true
-                                    userAgentString = DESKTOP_UA
-                                    useWideViewPort = true
-                                    loadWithOverviewMode = true
-                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                    javaScriptCanOpenWindowsAutomatically = true
-                                    setSupportMultipleWindows(true) // ★ 关键：允许新窗口（验证弹窗需要）
-                                }
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.databaseEnabled = true
+                                settings.userAgentString = DESKTOP_UA
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
+                                settings.javaScriptCanOpenWindowsAutomatically = true
+                                settings.setSupportMultipleWindows(true)
+                                // X5 下 mixedContentMode 通过 set 方法
+                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
                                 val cm = CookieManager.getInstance()
                                 cm.setAcceptCookie(true)
@@ -151,12 +168,10 @@ fun HyperOSLocatorApp(
                                 webViewClient = object : WebViewClient() {
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
-                                        // 注入桌面伪装
                                         view?.evaluateJavascript(desktopJsInject, null)
                                     }
 
                                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                        // 拦截手机版跳转
                                         url?.let {
                                             if (it.contains("/m.") || it.contains("/m/") || it.contains("mobile=1")) {
                                                 val fixed = it.replace("://m.", "://find.")
@@ -170,30 +185,29 @@ fun HyperOSLocatorApp(
                                     }
                                 }
 
-                                // ★ 正确实现 onCreateWindow，用 WebView.WebViewTransport 内部类
-                                webChromeClient = object : WebChromeClient() {
+                                // X5 的 onCreateWindow 通过 IX5WebChromeClient 接口
+                                webChromeClient = object : WebChromeClient(), IX5WebChromeClient {
                                     override fun onCreateWindow(
                                         view: WebView?,
                                         isDialog: Boolean,
                                         isUserGesture: Boolean,
-                                        resultMsg: android.os.Message?
+                                        resultMsg: Message?
                                     ): Boolean {
                                         val newWebView = WebView(context).apply {
                                             settings.javaScriptEnabled = true
                                             settings.domStorageEnabled = true
                                             settings.databaseEnabled = true
                                             settings.userAgentString = DESKTOP_UA
-                                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                             settings.setSupportMultipleWindows(true)
                                         }
-                                        // 新窗口也注入伪装
                                         newWebView.webViewClient = object : WebViewClient() {
                                             override fun onPageFinished(v: WebView?, u: String?) {
                                                 super.onPageFinished(v, u)
                                                 v?.evaluateJavascript(desktopJsInject, null)
                                             }
                                         }
-                                        val transport = resultMsg?.obj as? WebViewTransport
+                                        // X5 用 WebViewTransport（com.tencent 包下的）
+                                        val transport = resultMsg?.obj as? com.tencent.smtt.sdk.WebView.WebViewTransport
                                         transport?.webView = newWebView
                                         resultMsg?.sendToTarget()
                                         return true
@@ -246,22 +260,3 @@ fun HyperOSLocatorApp(
         }
     }
 }
-
-// JS 注入脚本抽出来复用
-private val desktopJsInject = """
-    (function() {
-        try {
-            Object.defineProperty(window, 'outerWidth', {get: () => 1920});
-            Object.defineProperty(window, 'outerHeight', {get: () => 1080});
-            Object.defineProperty(screen, 'width', {get: () => 1920});
-            Object.defineProperty(screen, 'height', {get: () => 1080});
-            Object.defineProperty(navigator, 'userAgent', {get: () => '$DESKTOP_UA'});
-            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            window.navigator.chrome = {runtime: {}};
-            var m = document.querySelector('meta[name="viewport"]');
-            if (!m) { m = document.createElement('meta'); m.name = 'viewport'; document.head.appendChild(m); }
-            m.content = 'width=1280';
-        } catch(e) {}
-    })();
-""".trimIndent()
