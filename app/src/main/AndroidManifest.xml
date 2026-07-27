@@ -9,6 +9,7 @@
         android:label="vivo亲友定位"
         android:supportsRtl="true"
         android:theme="@style/Theme.VivoLocator">
+        android:name=".MyApp"
         <activity
             android:name=".MainActivity"
             android:exported="true"
