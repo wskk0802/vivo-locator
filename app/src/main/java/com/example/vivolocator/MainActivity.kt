@@ -160,7 +160,7 @@ fun HyperOSLocatorApp(
                                 }
 
                                 webChromeClient = WebChromeClient()
-                                loadUrl("https://cloud.vivo.com.cn")
+                                loadUrl("https://find.vivo.com.cn")
                                 onWebViewCreated(this)
                             }
                         },
