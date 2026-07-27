@@ -1,7 +1,6 @@
 package com.example.vivolocator
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -140,10 +139,10 @@ fun HyperOSLocatorApp(
                                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                 }
 
-                                CookieManager.getInstance().apply {
-                                    setAcceptCookie(true)
-                                    setAcceptThirdPartyCookies(this@apply, true)
-                                }
+                                // ✅ 修正：明确用 this（WebView 本身）传给 setAcceptThirdPartyCookies
+                                val cookieManager = CookieManager.getInstance()
+                                cookieManager.setAcceptCookie(true)
+                                cookieManager.setAcceptThirdPartyCookies(this, true)
 
                                 webViewClient = object : WebViewClient() {
                                     override fun onPageFinished(view: WebView?, url: String?) {
@@ -170,7 +169,6 @@ fun HyperOSLocatorApp(
                 }
             }
 
-            // 定位卡片
             Card(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = cardBgColor),
@@ -194,7 +192,6 @@ fun HyperOSLocatorApp(
                 }
             }
 
-            // 刷新按钮
             Button(
                 onClick = { UpdateState.isRefreshing = true; onManualRefresh() },
                 shape = RoundedCornerShape(30.dp),
